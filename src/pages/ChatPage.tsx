@@ -86,11 +86,39 @@ export default function ChatPage() {
         <div className="w-10 h-10 rounded-full bg-primary-foreground/20 flex items-center justify-center">
           <GraduationCap className="w-6 h-6 text-primary-foreground" />
         </div>
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-primary-foreground font-bold text-lg leading-tight">HSTU CSE Buddy</h1>
           <p className="text-primary-foreground/70 text-xs">Your 4-Year Academic AI Assistant</p>
         </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-primary-foreground/10 transition-colors">
+              <MoreVertical className="w-5 h-5 text-primary-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48 rounded-xl">
+            <DropdownMenuItem onClick={() => setDarkMode(d => !d)} className="gap-2 cursor-pointer">
+              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {darkMode ? 'Light Mode' : 'Dark Mode'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => { setMessages([]); toast({ title: 'Chat cleared' }); }}
+              className="gap-2 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              Clear Chat
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => setAboutOpen(true)} className="gap-2 cursor-pointer">
+              <Info className="w-4 h-4" />
+              About
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
+
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
