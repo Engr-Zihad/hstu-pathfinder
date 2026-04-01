@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, GraduationCap, BookOpen, Code, Lightbulb } from 'lucide-react';
+import { Send, GraduationCap, BookOpen, Code, Lightbulb, MoreVertical, Trash2, Info, Moon, Sun } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Message, streamChat } from '@/lib/chat';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import AboutDialog from '@/components/AboutDialog';
 
 const SUGGESTIONS = [
   { icon: BookOpen, text: "Level 1 Semester I এ কি কি কোর্স আছে?", label: "Curriculum" },
