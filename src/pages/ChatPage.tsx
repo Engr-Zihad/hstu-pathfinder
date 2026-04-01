@@ -1,10 +1,18 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, GraduationCap, BookOpen, Code, Lightbulb } from 'lucide-react';
+import { Send, GraduationCap, BookOpen, Code, Lightbulb, MoreVertical, Trash2, Info, Moon, Sun } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Message, streamChat } from '@/lib/chat';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import AboutDialog from '@/components/AboutDialog';
 
 const SUGGESTIONS = [
   { icon: BookOpen, text: "Level 1 Semester I এ কি কি কোর্স আছে?", label: "Curriculum" },
@@ -25,9 +33,15 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode);
+  }, [darkMode]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -72,11 +86,39 @@ export default function ChatPage() {
         <div className="w-10 h-10 rounded-full bg-primary-foreground/20 flex items-center justify-center">
           <GraduationCap className="w-6 h-6 text-primary-foreground" />
         </div>
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-primary-foreground font-bold text-lg leading-tight">HSTU CSE Buddy</h1>
           <p className="text-primary-foreground/70 text-xs">Your 4-Year Academic AI Assistant</p>
         </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-primary-foreground/10 transition-colors">
+              <MoreVertical className="w-5 h-5 text-primary-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48 rounded-xl">
+            <DropdownMenuItem onClick={() => setDarkMode(d => !d)} className="gap-2 cursor-pointer">
+              {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {darkMode ? 'Light Mode' : 'Dark Mode'}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => { setMessages([]); toast({ title: 'Chat cleared' }); }}
+              className="gap-2 cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+              Clear Chat
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => setAboutOpen(true)} className="gap-2 cursor-pointer">
+              <Info className="w-4 h-4" />
+              About
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </header>
+
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
