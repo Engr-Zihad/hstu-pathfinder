@@ -1,96 +1,87 @@
 import { useState } from 'react';
-import { SEMESTERS, YEAR_COLORS, YEAR_ACCENT } from '@/lib/curriculum';
-import { ChevronDown, ChevronRight, BookOpen, Beaker, Filter } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { BookOpen, Search, ChevronDown, ChevronRight, ExternalLink, Check, Clock, Circle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { semesters, totalSubjects, totalCredits } from '@/data/curriculum';
+import type { Subject } from '@/data/curriculum';
+
+const yearColors: Record<number, string> = { 1: 'text-primary', 2: 'text-accent', 3: 'text-[hsl(var(--purple))]', 4: 'text-[hsl(var(--green))]' };
+const yearBgs: Record<number, string> = { 1: 'bg-primary/10', 2: 'bg-accent/10', 3: 'bg-[hsl(var(--purple))]/10', 4: 'bg-[hsl(var(--green))]/10' };
+type Status = 'not_started' | 'in_progress' | 'completed';
 
 export default function CurriculumPage() {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({ '1-1': true });
-  const [filter, setFilter] = useState<'all' | 'theory' | 'lab'>('all');
-  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  const navigate = useNavigate();
+  const [expandedSem, setExpandedSem] = useState<number>(1);
+  const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
+  const [filterYear, setFilterYear] = useState<string>('all');
+  const [search, setSearch] = useState('');
+  const [statuses, setStatuses] = useState<Record<string, Status>>(() => { try { return JSON.parse(localStorage.getItem('hstu_subject_status') || '{}'); } catch { return {}; } });
 
-  const toggle = (key: string) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
-
-  const filtered = SEMESTERS
-    .filter(s => !yearFilter || s.year === yearFilter)
-    .map(s => ({
-      ...s,
-      courses: s.courses.filter(c => filter === 'all' || c.type === filter),
-    }));
-
-  const totalCredits = SEMESTERS.reduce((sum, s) => sum + s.courses.reduce((cs, c) => cs + c.credits, 0), 0);
+  const setStatus = (code: string, status: Status) => { const u = { ...statuses, [code]: status }; setStatuses(u); localStorage.setItem('hstu_subject_status', JSON.stringify(u)); };
+  const filtered = semesters.filter(s => filterYear === 'all' || s.year === Number(filterYear));
+  const completed = Object.values(statuses).filter(s => s === 'completed').length;
+  const inProgress = Object.values(statuses).filter(s => s === 'in_progress').length;
+  const statusIcon = (code: string) => { const s = statuses[code] || 'not_started'; if (s === 'completed') return <Check className="w-3.5 h-3.5 text-[hsl(var(--green))]" />; if (s === 'in_progress') return <Clock className="w-3.5 h-3.5 text-yellow-400" />; return <Circle className="w-3.5 h-3.5 text-muted-foreground" />; };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-6">
-          <h1 className="text-2xl font-heading font-bold gradient-text mb-1">📚 HSTU CSE Curriculum</h1>
-          <p className="text-muted-foreground text-sm">4-Year B.Sc. Engineering in CSE • Total: {totalCredits} credits</p>
+    <div className="p-4 md:p-6 max-w-7xl mx-auto">
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+        <h1 className="text-2xl md:text-3xl font-heading font-bold text-foreground mb-2 flex items-center gap-3"><BookOpen className="w-7 h-7 text-primary" /> Curriculum</h1>
+        <p className="text-muted-foreground text-sm mb-6">HSTU CSE 4-Year B.Sc. Program — {totalSubjects} subjects, {totalCredits} credits</p>
+        <div className="glass-card rounded-xl p-4 mb-6">
+          <div className="flex justify-between text-sm mb-2"><span className="text-foreground font-medium">Progress</span><span className="text-muted-foreground">{completed}/{totalSubjects} completed</span></div>
+          <div className="h-2 rounded-full bg-secondary flex overflow-hidden"><div className="bg-[hsl(var(--green))] transition-all" style={{ width: `${(completed / totalSubjects) * 100}%` }} /><div className="bg-yellow-400 transition-all" style={{ width: `${(inProgress / totalSubjects) * 100}%` }} /></div>
+          <div className="flex gap-4 mt-2 text-xs text-muted-foreground"><span>✅ {completed}</span><span>⏳ {inProgress}</span><span>📋 {totalSubjects - completed - inProgress}</span></div>
         </div>
-
-        {/* Filters */}
-        <div className="flex flex-wrap gap-2 mb-6">
-          <div className="flex items-center gap-1 text-xs text-muted-foreground mr-2"><Filter className="w-3.5 h-3.5" /> Filter:</div>
-          {[null, 1, 2, 3, 4].map(y => (
-            <button key={String(y)} onClick={() => setYearFilter(y)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${yearFilter === y ? 'bg-primary/20 text-primary' : 'bg-secondary/50 text-muted-foreground hover:text-foreground'}`}>
-              {y ? `Year ${y}` : 'All Years'}
-            </button>
-          ))}
-          <div className="w-px h-6 bg-border mx-1" />
-          {(['all', 'theory', 'lab'] as const).map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filter === f ? 'bg-accent/20 text-accent' : 'bg-secondary/50 text-muted-foreground hover:text-foreground'}`}>
-              {f === 'all' ? 'All' : f === 'theory' ? '📖 Theory' : '🔬 Lab'}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-2 mb-4">
+          <div className="relative flex-1 min-w-[200px]"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search subjects..." className="w-full pl-9 pr-4 py-2 rounded-xl bg-secondary text-foreground text-sm border border-border outline-none focus:border-primary" /></div>
+          {['all','1','2','3','4'].map(y => (<button key={y} onClick={() => setFilterYear(y)} className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${filterYear === y ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground hover:text-foreground'}`}>{y === 'all' ? 'All' : `Year ${y}`}</button>))}
         </div>
-
-        {/* Timeline */}
-        <div className="space-y-4">
-          {filtered.map(sem => {
-            const key = `${sem.year}-${sem.semester}`;
-            const isOpen = expanded[key];
-            const semCredits = sem.courses.reduce((s, c) => s + c.credits, 0);
-            return (
-              <div key={key} className={`glass-card rounded-2xl overflow-hidden border-l-4 ${YEAR_COLORS[sem.year]}`}>
-                <button onClick={() => toggle(key)} className="w-full flex items-center justify-between p-4 hover:bg-secondary/20 transition-colors">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${YEAR_COLORS[sem.year]} flex items-center justify-center`}>
-                      <span className="text-lg font-bold">{sem.year}</span>
-                    </div>
-                    <div className="text-left">
-                      <h3 className={`font-heading font-bold text-sm ${YEAR_ACCENT[sem.year]}`}>{sem.label}</h3>
-                      <p className="text-xs text-muted-foreground">{sem.courses.length} courses • {semCredits} credits</p>
-                    </div>
-                  </div>
-                  {isOpen ? <ChevronDown className="w-5 h-5 text-muted-foreground" /> : <ChevronRight className="w-5 h-5 text-muted-foreground" />}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-3">
+            {filtered.map(sem => {
+              const semSubs = sem.subjects.filter(s => !search || s.name.toLowerCase().includes(search.toLowerCase()) || s.code.toLowerCase().includes(search.toLowerCase()));
+              if (search && semSubs.length === 0) return null;
+              return (<div key={sem.id} className="glass-card rounded-xl overflow-hidden">
+                <button onClick={() => setExpandedSem(expandedSem === sem.id ? 0 : sem.id)} className="w-full flex items-center justify-between px-4 py-3 text-left">
+                  <div className="flex items-center gap-3"><span className={`text-sm font-bold ${yearColors[sem.year]}`}>{sem.label}</span><span className="text-xs text-muted-foreground">{sem.subjects.length} subjects</span></div>
+                  {expandedSem === sem.id ? <ChevronDown className="w-4 h-4 text-muted-foreground" /> : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
                 </button>
-                {isOpen && (
-                  <div className="px-4 pb-4 space-y-2 animate-fade-in">
-                    {sem.courses.map((c, i) => (
-                      <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-secondary/30 hover:bg-secondary/50 transition-colors">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${c.type === 'theory' ? 'bg-primary/15 text-primary' : 'bg-accent/15 text-accent'}`}>
-                          {c.type === 'theory' ? <BookOpen className="w-4 h-4" /> : <Beaker className="w-4 h-4" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-mono text-muted-foreground">{c.code}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                              c.difficulty === 'Easy' ? 'bg-green-500/15 text-green-400' :
-                              c.difficulty === 'Hard' ? 'bg-red-500/15 text-red-400' : 'bg-yellow-500/15 text-yellow-400'
-                            }`}>{c.difficulty}</span>
-                          </div>
-                          <p className="text-sm text-foreground truncate">{c.name}</p>
-                        </div>
-                        <span className="text-xs text-muted-foreground shrink-0">{c.credits} cr</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                {expandedSem === sem.id && (<div className="px-4 pb-3 space-y-1.5">{semSubs.map(sub => (
+                  <button key={sub.code} onClick={() => setSelectedSubject(sub)} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-sm transition-all ${selectedSubject?.code === sub.code ? 'bg-primary/10 border border-primary/30' : 'hover:bg-secondary'}`}>
+                    {statusIcon(sub.code)}<span className={`text-xs font-mono px-2 py-0.5 rounded ${yearBgs[sem.year]} ${yearColors[sem.year]}`}>{sub.code}</span><span className="text-foreground flex-1 truncate">{sub.name}</span><span className="text-xs text-muted-foreground">{sub.credits} cr</span>
+                  </button>))}</div>)}
+              </div>);
+            })}
+          </div>
+          <div className="lg:col-span-1">
+            {selectedSubject ? (
+              <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="glass-card rounded-xl p-5 sticky top-4">
+                <span className="text-xs font-mono px-2 py-1 rounded bg-primary/10 text-primary">{selectedSubject.code}</span>
+                <h2 className="text-lg font-heading font-bold text-foreground mt-2">{selectedSubject.name}</h2>
+                <div className="flex gap-2 mt-2 flex-wrap">
+                  <span className="text-xs px-2 py-1 rounded-full bg-secondary text-muted-foreground">{selectedSubject.credits} Credits</span>
+                  <span className="text-xs px-2 py-1 rounded-full bg-secondary text-muted-foreground capitalize">{selectedSubject.type}</span>
+                  <span className={`text-xs px-2 py-1 rounded-full ${selectedSubject.difficulty === 'Beginner' ? 'bg-[hsl(var(--green))]/10 text-[hsl(var(--green))]' : selectedSubject.difficulty === 'Intermediate' ? 'bg-yellow-400/10 text-yellow-400' : 'bg-destructive/10 text-destructive'}`}>{selectedSubject.difficulty}</span>
+                </div>
+                <p className="text-sm text-muted-foreground mt-3">{selectedSubject.description}</p>
+                <div className="mt-4"><h3 className="text-sm font-semibold text-foreground mb-2">What you'll learn:</h3>
+                  <ul className="space-y-1">{selectedSubject.whatYouLearn.map((item, i) => (<li key={i} className="text-sm text-muted-foreground flex items-start gap-2"><Check className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />{item}</li>))}</ul>
+                </div>
+                <div className="mt-4"><label className="text-xs text-muted-foreground">Status:</label>
+                  <select value={statuses[selectedSubject.code] || 'not_started'} onChange={e => setStatus(selectedSubject.code, e.target.value as Status)} className="mt-1 w-full px-3 py-2 rounded-lg bg-secondary border border-border text-foreground text-sm outline-none">
+                    <option value="not_started">Not Started</option><option value="in_progress">In Progress</option><option value="completed">Completed</option>
+                  </select>
+                </div>
+                <div className="mt-4 space-y-2">
+                  <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(selectedSubject.name + ' bangla tutorial')}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3 py-2 rounded-lg bg-destructive/10 text-destructive text-sm hover:bg-destructive/20 transition-colors w-full"><ExternalLink className="w-4 h-4" /> YouTube</a>
+                  <button onClick={() => navigate('/chat')} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-primary/10 text-primary text-sm hover:bg-primary/20 transition-colors w-full"><ExternalLink className="w-4 h-4" /> Ask AI</button>
+                </div>
+              </motion.div>
+            ) : (<div className="glass-card rounded-xl p-8 text-center sticky top-4"><BookOpen className="w-10 h-10 text-muted-foreground mx-auto mb-3" /><p className="text-muted-foreground text-sm">Select a subject to view details</p></div>)}
+          </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
