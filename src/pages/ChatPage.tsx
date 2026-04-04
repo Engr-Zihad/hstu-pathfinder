@@ -1,202 +1,222 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { Send, Copy, ThumbsUp, ThumbsDown, ArrowDown } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Send, Copy, Check, ThumbsUp, ThumbsDown, RefreshCw, ArrowDown, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import type { Message, Chat } from '@/types/chat';
-import { streamChat } from '@/lib/chat';
+import toast from 'react-hot-toast';
+import { Message, Chat } from '@/types/chat';
+import { sendToClaudeAPI } from '@/utils/claudeApi';
+import { parseMarkdown } from '@/utils/markdownParser';
+import { typeText } from '@/utils/typeAnimation';
+import AIAvatar from '@/components/ui/AIAvatar';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
 
-const quickActions = [
-  { emoji: '📖', label: 'Curriculum Guide', msg: 'Tell me about the HSTU CSE curriculum — all 8 semesters in detail' },
-  { emoji: '🧮', label: 'CGPA Calculator', msg: 'How does the CGPA calculation work at HSTU? Explain with examples' },
-  { emoji: '🗺️', label: 'Career Roadmap', msg: 'Give me a complete 4-year career roadmap for a CSE student at HSTU' },
-  { emoji: '💻', label: 'Start Coding', msg: 'I am a first-year HSTU CSE student. How do I start learning programming?' },
-  { emoji: '🎓', label: 'MS/PhD Guide', msg: 'How can I apply for MS/PhD abroad after graduating from HSTU CSE?' },
-  { emoji: '🏆', label: 'Competitive Prog', msg: 'How to start competitive programming as an HSTU CSE student?' },
-  { emoji: '🎨', label: 'Learn UI/UX', msg: 'How to learn UI/UX design as a CSE student? Give me a complete roadmap' },
-  { emoji: '🔗', label: 'Web3 Intro', msg: 'What is Web3 and blockchain? How can I start learning as a CSE student?' },
+const MAX_VISIBLE = 30;
+const quickChips = [
+  '📖 Curriculum Guide', '🧮 CGPA Calculator', '🗺️ Career Roadmap', '💻 Coding Help',
+  '🎓 Study Abroad', '🏆 Competitive Programming', '🎨 UI/UX Design', '👨‍🏫 Teachers Info',
 ];
 
-function generateId() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); toast.success('Copied!'); }}
-      className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
-      {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-    </button>
-  );
-}
-
 export default function ChatPage() {
-  const [chats, setChats] = useState<Chat[]>(() => { try { return JSON.parse(localStorage.getItem('hstu_chats') || '[]'); } catch { return []; } });
-  const [activeChatId, setActiveChatId] = useState<string>(() => localStorage.getItem('hstu_active_chat_id') || '');
+  const navigate = useNavigate();
+  const [chats, setChats] = useLocalStorage<Chat[]>('hstu_chats', []);
+  const [activeChatId, setActiveChatId] = useLocalStorage<string>('hstu_active_chat', '');
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const cancelTypingRef = useRef<(() => void) | null>(null);
 
-  const activeChat = chats.find(c => c.id === activeChatId);
-  const messages = activeChat?.messages || [];
+  const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
+  const visibleMessages = useMemo(() => {
+    if (!activeChat) return [];
+    const msgs = activeChat.messages;
+    return msgs.length > MAX_VISIBLE ? msgs.slice(msgs.length - MAX_VISIBLE) : msgs;
+  }, [activeChat]);
 
-  const saveChats = useCallback((updatedChats: Chat[]) => {
-    const trimmed = updatedChats.slice(0, 50);
-    setChats(trimmed);
-    localStorage.setItem('hstu_chats', JSON.stringify(trimmed));
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  useEffect(() => { scrollToBottom(); }, [messages.length]);
+  useEffect(() => { scrollToBottom(); }, [visibleMessages.length, scrollToBottom]);
+
+  const handleScroll = useCallback(() => {
+    if (!containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    setShowScrollBtn(scrollHeight - scrollTop - clientHeight > 200);
+  }, []);
+
+  const createNewChat = useCallback(() => {
+    const newChat: Chat = {
+      id: Date.now().toString(), title: 'New Chat', messages: [],
+      createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    setChats(prev => [newChat, ...prev].slice(0, 50));
+    setActiveChatId(newChat.id);
+    return newChat.id;
+  }, [setChats, setActiveChatId]);
 
   useEffect(() => {
-    const el = chatContainerRef.current;
-    if (!el) return;
-    const onScroll = () => setShowScrollBtn(el.scrollHeight - el.scrollTop - el.clientHeight > 200);
-    el.addEventListener('scroll', onScroll);
-    return () => el.removeEventListener('scroll', onScroll);
+    if (!activeChatId || !chats.find(c => c.id === activeChatId)) {
+      if (chats.length > 0) setActiveChatId(chats[0].id);
+      else createNewChat();
+    }
+  }, [activeChatId, chats, setActiveChatId, createNewChat]);
+
+  const handleSend = useCallback(async (text?: string) => {
+    const msg = (text || input).trim();
+    if (!msg || loading) return;
+    const apiKey = localStorage.getItem('hstu_api_key');
+    if (!apiKey) { toast.error('Set your API key in Settings first.'); navigate('/settings'); return; }
+
+    let chatId = activeChatId;
+    if (!chatId || !chats.find(c => c.id === chatId)) chatId = createNewChat();
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: msg, displayContent: msg, timestamp: Date.now() };
+    setChats(prev => prev.map(c => c.id === chatId ? {
+      ...c, messages: [...c.messages, userMsg],
+      title: c.messages.length === 0 ? msg.slice(0, 40) : c.title, updatedAt: Date.now(),
+    } : c));
+
+    setLoading(true);
+    try {
+      const currentMsgs = chats.find(c => c.id === chatId)?.messages || [];
+      const response = await sendToClaudeAPI(currentMsgs, msg,
+        localStorage.getItem('hstu_language') || 'auto',
+        localStorage.getItem('hstu_response_length') || 'detailed');
+
+      const aiId = (Date.now() + 1).toString();
+      const aiMsg: Message = { id: aiId, role: 'assistant', content: response, displayContent: '', timestamp: Date.now(), isTyping: true };
+      setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, aiMsg], updatedAt: Date.now() } : c));
+
+      cancelTypingRef.current = typeText(response, (partial) => {
+        setChats(prev => prev.map(c => c.id === chatId ? {
+          ...c, messages: c.messages.map(m => m.id === aiId ? { ...m, displayContent: partial } : m),
+        } : c));
+      }, () => {
+        setChats(prev => prev.map(c => c.id === chatId ? {
+          ...c, messages: c.messages.map(m => m.id === aiId ? { ...m, displayContent: response, isTyping: false } : m),
+        } : c));
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Unknown error';
+      toast.error(errMsg);
+      const errorAiMsg: Message = { id: (Date.now() + 1).toString(), role: 'assistant', content: `❌ ${errMsg}`, displayContent: `❌ ${errMsg}`, timestamp: Date.now() };
+      setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, errorAiMsg] } : c));
+    } finally { setLoading(false); }
+  }, [input, loading, activeChatId, chats, setChats, createNewChat, navigate]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  }, [handleSend]);
+
+  const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
   }, []);
 
-  const sendMessage = async (text: string) => {
-    if (!text.trim() || loading) return;
-    setInput('');
-    let chatId = activeChatId;
-    let currentChats = [...chats];
-    if (!chatId || !currentChats.find(c => c.id === chatId)) {
-      const newChat: Chat = { id: generateId(), title: text.slice(0, 40), messages: [], createdAt: Date.now(), updatedAt: Date.now() };
-      currentChats = [newChat, ...currentChats];
-      chatId = newChat.id;
-      setActiveChatId(chatId);
-      localStorage.setItem('hstu_active_chat_id', chatId);
-    }
-    const userMsg: Message = { id: generateId(), role: 'user', content: text, timestamp: Date.now() };
-    const aiMsg: Message = { id: generateId(), role: 'assistant', content: '', timestamp: Date.now() };
-    currentChats = currentChats.map(c => c.id === chatId ? { ...c, title: c.messages.length === 0 ? text.slice(0, 40) : c.title, messages: [...c.messages, userMsg, aiMsg], updatedAt: Date.now() } : c);
-    saveChats(currentChats);
-    setLoading(true);
-    const historyMsgs = currentChats.find(c => c.id === chatId)!.messages.slice(0, -1).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-    streamChat({
-      messages: historyMsgs,
-      onDelta: (delta) => {
-        currentChats = currentChats.map(c => { if (c.id !== chatId) return c; const msgs = [...c.messages]; const last = msgs[msgs.length - 1]; msgs[msgs.length - 1] = { ...last, content: last.content + delta }; return { ...c, messages: msgs }; });
-        saveChats(currentChats);
-      },
-      onDone: () => setLoading(false),
-      onError: (err) => {
-        currentChats = currentChats.map(c => { if (c.id !== chatId) return c; const msgs = [...c.messages]; msgs[msgs.length - 1] = { ...msgs[msgs.length - 1], content: '❌ Error: ' + err }; return { ...c, messages: msgs }; });
-        saveChats(currentChats); setLoading(false); toast.error(err);
-      },
-    });
-  };
+  const copyMessage = useCallback((content: string) => { navigator.clipboard.writeText(content); toast.success('Copied!'); }, []);
+  const setFeedback = useCallback((msgId: string, fb: 'up' | 'down') => {
+    setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: c.messages.map(m => m.id === msgId ? { ...m, feedback: fb } : m) } : c));
+  }, [activeChatId, setChats]);
 
-  const deleteChat = (id: string) => {
-    const updated = chats.filter(c => c.id !== id); saveChats(updated);
-    if (activeChatId === id) { setActiveChatId(updated[0]?.id || ''); localStorage.setItem('hstu_active_chat_id', updated[0]?.id || ''); }
-    toast.success('Chat deleted');
-  };
+  const deleteChat = useCallback((chatId: string) => {
+    setChats(prev => prev.filter(c => c.id !== chatId));
+    if (activeChatId === chatId) { const r = chats.filter(c => c.id !== chatId); r.length > 0 ? setActiveChatId(r[0].id) : createNewChat(); }
+  }, [chats, activeChatId, setChats, setActiveChatId, createNewChat]);
 
-  const setFeedback = (msgId: string, feedback: 'up' | 'down') => {
-    saveChats(chats.map(c => c.id !== activeChatId ? c : { ...c, messages: c.messages.map(m => m.id === msgId ? { ...m, feedback } : m) }));
-  };
-
-  const regenerate = () => {
-    if (!activeChat || activeChat.messages.length < 2) return;
-    const lastUserMsg = [...activeChat.messages].reverse().find(m => m.role === 'user');
-    if (lastUserMsg) { saveChats(chats.map(c => c.id !== activeChatId ? c : { ...c, messages: c.messages.slice(0, -1) })); sendMessage(lastUserMsg.content); }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input); } };
-
-  useEffect(() => { if (textareaRef.current) { textareaRef.current.style.height = 'auto'; textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 150) + 'px'; } }, [input]);
+  const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const formatRelative = (ts: number) => { const d = Date.now() - ts; if (d < 60000) return 'now'; if (d < 3600000) return `${Math.floor(d/60000)}m`; if (d < 86400000) return `${Math.floor(d/3600000)}h`; return `${Math.floor(d/86400000)}d`; };
 
   return (
-    <div className="flex h-screen">
-      <div className="hidden lg:flex flex-col w-64 border-r border-border bg-[hsl(var(--sidebar-background))]/50 shrink-0">
-        <div className="p-3 border-b border-border">
-          <button onClick={() => { const nc: Chat = { id: generateId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now() }; saveChats([nc, ...chats]); setActiveChatId(nc.id); localStorage.setItem('hstu_active_chat_id', nc.id); }}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-primary to-accent text-primary-foreground text-sm font-medium hover:opacity-90">+ New Chat</button>
+    <div className="flex flex-1 h-[calc(100vh-3.5rem)] md:h-screen overflow-hidden">
+      <div className="hidden lg:flex flex-col w-[260px] border-r border-[--border]" style={{ background: 'rgba(13,17,23,0.5)' }}>
+        <div className="p-3">
+          <button onClick={createNewChat} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium text-white" style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}>＋ New Chat</button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
           {chats.map(chat => (
-            <div key={chat.id} className={`group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-sm transition-colors ${chat.id === activeChatId ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}
-              onClick={() => { setActiveChatId(chat.id); localStorage.setItem('hstu_active_chat_id', chat.id); }}>
-              <span className="truncate flex-1">{chat.title}</span>
-              <button onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/20 text-destructive"><Trash2 className="w-3 h-3" /></button>
+            <div key={chat.id} onClick={() => setActiveChatId(chat.id)}
+              className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-sm transition-all ${chat.id === activeChatId ? 'bg-blue-500/10 text-blue-400' : 'text-[--text-2] hover:bg-white/5'}`}>
+              <span className="flex-1 truncate">{chat.title}</span>
+              <span className="text-[10px] text-[--text-3] shrink-0">{formatRelative(chat.updatedAt)}</span>
+              <button onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs shrink-0">✕</button>
             </div>
           ))}
-          {chats.length === 0 && <p className="text-xs text-muted-foreground text-center py-8">No chats yet</p>}
         </div>
       </div>
+
       <div className="flex-1 flex flex-col min-w-0 relative">
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center px-4">
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
-                <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center mb-6 mx-auto glow-ring"><span className="text-3xl">🤖</span></div>
-                <h1 className="text-2xl md:text-3xl font-heading font-bold text-foreground mb-2">Hello! I'm HSTU CSE Guide AI 👋</h1>
-                <p className="text-muted-foreground mb-8 max-w-md">Your 4-year academic partner at HSTU. Ask me anything about curriculum, career, coding, or higher study.</p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 max-w-2xl">
-                  {quickActions.map((qa) => (
-                    <button key={qa.label} onClick={() => sendMessage(qa.msg)} className="glass-card px-3 py-3 rounded-xl text-sm text-left hover:border-primary/50 hover:shadow-[0_0_24px_hsl(var(--primary)/0.15)] transition-all">
-                      <span className="text-lg">{qa.emoji}</span><p className="text-foreground mt-1 text-xs font-medium">{qa.label}</p>
-                    </button>
-                  ))}
-                </div>
-              </motion.div>
+        <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
+          {!activeChat || activeChat.messages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+              <AIAvatar size={56} />
+              <h2 className="font-heading font-bold text-2xl mt-4" style={{ color: 'var(--text-1)' }}>আমি Ovik 👋</h2>
+              <p className="text-sm mt-1" style={{ color: 'var(--text-2)' }}>HSTU CSE-এর তোমার AI সাথী 🎓</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-8 max-w-xl">
+                {quickChips.map(chip => (
+                  <button key={chip} onClick={() => handleSend(chip)} className="glass-card px-3 py-2.5 rounded-xl text-xs hover:bg-white/[0.07] transition-all text-left" style={{ color: 'var(--text-2)' }}>{chip}</button>
+                ))}
+              </div>
             </div>
           ) : (
-            messages.map((msg, i) => (
-              <motion.div key={msg.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className="max-w-[85%] md:max-w-[75%]">
-                  <div className={`px-4 py-3 rounded-2xl ${msg.role === 'user' ? 'bg-gradient-to-r from-primary to-primary/80 text-primary-foreground rounded-br-sm' : 'glass-card rounded-bl-sm'}`}>
-                    {msg.role === 'assistant' ? (
-                      <div className="prose prose-invert prose-sm max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                          code({ className, children, ...props }) {
-                            const match = /language-(\w+)/.exec(className || '');
-                            const code = String(children).replace(/\n$/, '');
-                            if (match) return (<div className="relative group my-3"><div className="absolute top-2 right-2 z-10"><CopyButton text={code} /></div><SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" className="rounded-xl !bg-[hsl(var(--secondary))] text-sm">{code}</SyntaxHighlighter></div>);
-                            return <code className="bg-secondary px-1.5 py-0.5 rounded text-accent text-sm font-mono" {...props}>{children}</code>;
-                          },
-                          a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:text-accent underline">{children}</a>; },
-                        }}>{msg.content || ''}</ReactMarkdown>
-                        {loading && i === messages.length - 1 && !msg.content && (
-                          <div className="flex gap-1.5 py-2"><div className="w-2 h-2 rounded-full bg-primary typing-dot" /><div className="w-2 h-2 rounded-full bg-primary typing-dot" /><div className="w-2 h-2 rounded-full bg-primary typing-dot" /></div>
-                        )}
+            <div className="max-w-3xl mx-auto space-y-4">
+              {visibleMessages.map(msg => (
+                <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                  {msg.role === 'assistant' && <AIAvatar size={36} spinning={msg.isTyping} />}
+                  <div className={msg.role === 'user' ? 'max-w-[72%]' : 'max-w-[88%]'}>
+                    {msg.role === 'assistant' && (
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <span className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Ovik</span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{formatTime(msg.timestamp)}</span>
                       </div>
-                    ) : (<p className="text-sm whitespace-pre-wrap">{msg.content}</p>)}
-                  </div>
-                  {msg.role === 'assistant' && msg.content && (
-                    <div className="flex items-center gap-1 mt-1.5 ml-1">
-                      <CopyButton text={msg.content} />
-                      <button onClick={() => setFeedback(msg.id, 'up')} className={`p-1.5 rounded-lg transition-colors ${msg.feedback === 'up' ? 'text-[hsl(var(--green))]' : 'text-muted-foreground hover:text-foreground'}`}><ThumbsUp className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => setFeedback(msg.id, 'down')} className={`p-1.5 rounded-lg transition-colors ${msg.feedback === 'down' ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'}`}><ThumbsDown className="w-3.5 h-3.5" /></button>
-                      {i === messages.length - 1 && <button onClick={regenerate} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground"><RefreshCw className="w-3.5 h-3.5" /></button>}
-                      <span className="text-[10px] text-muted-foreground ml-2">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    )}
+                    <div className={`px-4 py-3 rounded-2xl ${msg.role === 'user' ? 'rounded-br-sm text-white' : 'glass-card rounded-bl-sm'}`}
+                      style={msg.role === 'user' ? { background: 'linear-gradient(135deg, #2563eb, #1d4ed8)' } : undefined}>
+                      {msg.role === 'assistant' ? (
+                        <div className="markdown-body text-sm leading-relaxed" style={{ color: 'var(--text-1)' }}
+                          dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.displayContent || msg.content) + (msg.isTyping ? '<span class="typing-cursor">▌</span>' : '') }} />
+                      ) : <p className="text-sm whitespace-pre-wrap">{msg.content}</p>}
                     </div>
-                  )}
-                  {msg.role === 'user' && <p className="text-[10px] text-muted-foreground mt-1 text-right mr-1">{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>}
+                    {msg.role === 'user' && <p className="text-[10px] text-right mt-1" style={{ color: 'var(--text-3)' }}>{formatTime(msg.timestamp)}</p>}
+                    {msg.role === 'assistant' && !msg.isTyping && (
+                      <div className="flex items-center gap-1 mt-1.5">
+                        <button onClick={() => copyMessage(msg.content)} className="p-1.5 rounded-lg hover:bg-white/10" style={{ color: 'var(--text-3)' }} title="Copy"><Copy className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setFeedback(msg.id, 'up')} className={`p-1.5 rounded-lg hover:bg-white/10 ${msg.feedback === 'up' ? 'text-green-400' : ''}`} style={msg.feedback !== 'up' ? { color: 'var(--text-3)' } : undefined}><ThumbsUp className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setFeedback(msg.id, 'down')} className={`p-1.5 rounded-lg hover:bg-white/10 ${msg.feedback === 'down' ? 'text-red-400' : ''}`} style={msg.feedback !== 'down' ? { color: 'var(--text-3)' } : undefined}><ThumbsDown className="w-3.5 h-3.5" /></button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </motion.div>
-            ))
+              ))}
+              {loading && (
+                <div className="flex gap-3">
+                  <AIAvatar size={36} spinning />
+                  <div className="glass-card rounded-2xl rounded-bl-sm px-4 py-3">
+                    <div className="flex gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 typing-dot" /><span className="w-2 h-2 rounded-full bg-blue-400 typing-dot" /><span className="w-2 h-2 rounded-full bg-blue-400 typing-dot" /></div>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
           )}
-          <div ref={messagesEndRef} />
         </div>
-        {showScrollBtn && <button onClick={scrollToBottom} className="absolute bottom-24 right-6 p-2 rounded-full bg-primary text-primary-foreground shadow-lg z-20"><ArrowDown className="w-4 h-4" /></button>}
-        <div className="p-3 md:p-4 border-t border-border">
-          <div className="glass-card rounded-2xl flex items-end gap-2 p-2">
-            <textarea ref={textareaRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Ask me anything about HSTU CSE..." rows={1}
-              className="flex-1 bg-transparent text-foreground text-sm resize-none outline-none px-3 py-2 max-h-[150px] placeholder:text-muted-foreground" />
-            <button onClick={() => sendMessage(input)} disabled={!input.trim() || loading}
-              className="p-2.5 rounded-xl bg-gradient-to-r from-primary to-accent text-primary-foreground disabled:opacity-40 hover:opacity-90 transition-all shrink-0"><Send className="w-4 h-4" /></button>
+        {showScrollBtn && (
+          <button onClick={scrollToBottom} className="absolute bottom-24 right-6 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg z-20"><ArrowDown className="w-5 h-5" /></button>
+        )}
+        <div className="px-4 pb-4 pt-2">
+          <div className="max-w-3xl mx-auto glass-card rounded-2xl flex items-end gap-2 p-3">
+            <textarea ref={textareaRef} value={input} onChange={handleTextareaChange} onKeyDown={handleKeyDown}
+              placeholder="Ask me anything about HSTU CSE..." rows={1}
+              className="flex-1 bg-transparent text-sm resize-none outline-none min-h-[36px] max-h-[150px]" style={{ color: 'var(--text-1)' }} />
+            {input.length > 100 && <span className="text-[10px] shrink-0 self-end pb-1" style={{ color: 'var(--text-3)' }}>{input.length}</span>}
+            <button onClick={() => handleSend()} disabled={!input.trim() || loading}
+              className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-white disabled:opacity-40 transition-opacity"
+              style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}><Send className="w-4 h-4" /></button>
           </div>
-          {input.length > 100 && <p className="text-[10px] text-muted-foreground mt-1 text-right">{input.length} characters</p>}
         </div>
       </div>
     </div>
