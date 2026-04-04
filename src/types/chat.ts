@@ -2,8 +2,10 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  displayContent: string;
   timestamp: number;
-  feedback?: 'up' | 'down';
+  feedback?: 'up' | 'down' | null;
+  isTyping?: boolean;
 }
 
 export interface Chat {
