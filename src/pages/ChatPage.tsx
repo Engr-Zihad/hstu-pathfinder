@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Send, Copy, ThumbsUp, ThumbsDown, ArrowDown } from 'lucide-react';
+import { Send, Copy, ThumbsUp, ThumbsDown, ArrowDown, Plus, Trash2, MessageSquare } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Message, Chat } from '@/types/chat';
@@ -22,6 +22,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [showChatList, setShowChatList] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -53,6 +54,7 @@ export default function ChatPage() {
     };
     setChats(prev => [newChat, ...prev].slice(0, 50));
     setActiveChatId(newChat.id);
+    setShowChatList(false);
     return newChat.id;
   }, [setChats, setActiveChatId]);
 
@@ -66,8 +68,6 @@ export default function ChatPage() {
   const handleSend = useCallback(async (text?: string) => {
     const msg = (text || input).trim();
     if (!msg || loading) return;
-    const apiKey = localStorage.getItem('hstu_api_key');
-    if (!apiKey) { toast.error('Set your API key in Settings first.'); navigate('/settings'); return; }
 
     let chatId = activeChatId;
     if (!chatId || !chats.find(c => c.id === chatId)) chatId = createNewChat();
@@ -106,7 +106,7 @@ export default function ChatPage() {
       const errorAiMsg: Message = { id: (Date.now() + 1).toString(), role: 'assistant', content: `❌ ${errMsg}`, displayContent: `❌ ${errMsg}`, timestamp: Date.now() };
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, errorAiMsg] } : c));
     } finally { setLoading(false); }
-  }, [input, loading, activeChatId, chats, setChats, createNewChat, navigate]);
+  }, [input, loading, activeChatId, chats, setChats, createNewChat]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -123,19 +123,41 @@ export default function ChatPage() {
     setChats(prev => prev.map(c => c.id === activeChatId ? { ...c, messages: c.messages.map(m => m.id === msgId ? { ...m, feedback: fb } : m) } : c));
   }, [activeChatId, setChats]);
 
-  const deleteChat = useCallback((chatId: string) => {
+  const deleteChat = useCallback((chatId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setChats(prev => prev.filter(c => c.id !== chatId));
-    if (activeChatId === chatId) { const r = chats.filter(c => c.id !== chatId); r.length > 0 ? setActiveChatId(r[0].id) : createNewChat(); }
+    if (activeChatId === chatId) {
+      const remaining = chats.filter(c => c.id !== chatId);
+      if (remaining.length > 0) setActiveChatId(remaining[0].id);
+      else createNewChat();
+    }
+    toast.success('Chat deleted');
   }, [chats, activeChatId, setChats, setActiveChatId, createNewChat]);
+
+  const clearAllChats = useCallback(() => {
+    if (confirm('সব চ্যাট মুছে ফেলবেন?')) {
+      setChats([]);
+      createNewChat();
+      toast.success('All chats cleared');
+    }
+  }, [setChats, createNewChat]);
 
   const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   const formatRelative = (ts: number) => { const d = Date.now() - ts; if (d < 60000) return 'now'; if (d < 3600000) return `${Math.floor(d/60000)}m`; if (d < 86400000) return `${Math.floor(d/3600000)}h`; return `${Math.floor(d/86400000)}d`; };
 
   return (
     <div className="flex flex-1 h-[calc(100vh-3.5rem)] md:h-screen overflow-hidden">
-      <div className="hidden lg:flex flex-col w-[260px] border-r border-[--border]" style={{ background: 'rgba(13,17,23,0.5)' }}>
-        <div className="p-3">
-          <button onClick={createNewChat} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium text-white" style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}>＋ New Chat</button>
+      {/* Desktop chat list sidebar */}
+      <div className="hidden lg:flex flex-col w-[260px] border-r border-[--border] shrink-0" style={{ background: 'rgba(13,17,23,0.5)' }}>
+        <div className="p-3 space-y-2">
+          <button onClick={createNewChat} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium text-white" style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}>
+            <Plus className="w-4 h-4" /> New Chat
+          </button>
+          {chats.length > 0 && (
+            <button onClick={clearAllChats} className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs text-red-400 hover:bg-red-500/10 transition-colors">
+              <Trash2 className="w-3.5 h-3.5" /> Clear All History
+            </button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto px-2 space-y-0.5">
           {chats.map(chat => (
@@ -143,19 +165,63 @@ export default function ChatPage() {
               className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-sm transition-all ${chat.id === activeChatId ? 'bg-blue-500/10 text-blue-400' : 'text-[--text-2] hover:bg-white/5'}`}>
               <span className="flex-1 truncate">{chat.title}</span>
               <span className="text-[10px] text-[--text-3] shrink-0">{formatRelative(chat.updatedAt)}</span>
-              <button onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs shrink-0">✕</button>
+              <button onClick={(e) => deleteChat(chat.id, e)} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs shrink-0 hover:text-red-300">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </div>
           ))}
         </div>
       </div>
 
+      {/* Mobile chat list overlay */}
+      {showChatList && (
+        <>
+          <div className="fixed inset-0 bg-black/60 z-50 lg:hidden" onClick={() => setShowChatList(false)} />
+          <div className="fixed left-0 top-0 bottom-0 w-[280px] z-50 lg:hidden flex flex-col" style={{ background: '#0d1117' }}>
+            <div className="p-3 space-y-2 border-b border-[--border]">
+              <button onClick={createNewChat} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium text-white" style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}>
+                <Plus className="w-4 h-4" /> New Chat
+              </button>
+              {chats.length > 0 && (
+                <button onClick={clearAllChats} className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs text-red-400 hover:bg-red-500/10 transition-colors">
+                  <Trash2 className="w-3.5 h-3.5" /> Clear All History
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
+              {chats.map(chat => (
+                <div key={chat.id} onClick={() => { setActiveChatId(chat.id); setShowChatList(false); }}
+                  className={`group flex items-center gap-2 px-3 py-2.5 rounded-xl cursor-pointer text-sm transition-all ${chat.id === activeChatId ? 'bg-blue-500/10 text-blue-400' : 'text-[--text-2] hover:bg-white/5'}`}>
+                  <span className="flex-1 truncate">{chat.title}</span>
+                  <span className="text-[10px] text-[--text-3] shrink-0">{formatRelative(chat.updatedAt)}</span>
+                  <button onClick={(e) => deleteChat(chat.id, e)} className="text-red-400 text-xs shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              {chats.length === 0 && <p className="text-center text-xs text-[--text-3] py-8">No chats yet</p>}
+            </div>
+          </div>
+        </>
+      )}
+
       <div className="flex-1 flex flex-col min-w-0 relative">
+        {/* Mobile chat header with New Chat + History */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[--border] lg:hidden">
+          <button onClick={() => setShowChatList(true)} className="flex items-center gap-2 text-xs text-[--text-2] hover:text-[--text-1] px-2 py-1.5 rounded-lg hover:bg-white/5">
+            <MessageSquare className="w-4 h-4" /> History ({chats.length})
+          </button>
+          <button onClick={createNewChat} className="flex items-center gap-1.5 text-xs text-white px-3 py-1.5 rounded-lg" style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}>
+            <Plus className="w-3.5 h-3.5" /> New
+          </button>
+        </div>
+
         <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
           {!activeChat || activeChat.messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
               <AIAvatar size={56} />
-              <h2 className="font-heading font-bold text-2xl mt-4" style={{ color: 'var(--text-1)' }}>আমি Ovik 👋</h2>
-              <p className="text-sm mt-1" style={{ color: 'var(--text-2)' }}>HSTU CSE-এর তোমার AI সাথী 🎓</p>
+              <h2 className="font-heading font-bold text-2xl mt-4" style={{ color: 'var(--text-1)' }}>HSTU CSE Guide AI 👋</h2>
+              <p className="text-sm mt-1" style={{ color: 'var(--text-2)' }}>তোমার ৪ বছরের একাডেমিক সাথী 🎓</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-8 max-w-xl">
                 {quickChips.map(chip => (
                   <button key={chip} onClick={() => handleSend(chip)} className="glass-card px-3 py-2.5 rounded-xl text-xs hover:bg-white/[0.07] transition-all text-left" style={{ color: 'var(--text-2)' }}>{chip}</button>
@@ -170,7 +236,7 @@ export default function ChatPage() {
                   <div className={msg.role === 'user' ? 'max-w-[72%]' : 'max-w-[88%]'}>
                     {msg.role === 'assistant' && (
                       <div className="flex items-baseline gap-2 mb-1">
-                        <span className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>Ovik</span>
+                        <span className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>HSTU Guide</span>
                         <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>{formatTime(msg.timestamp)}</span>
                       </div>
                     )}

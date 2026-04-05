@@ -67,7 +67,7 @@ export default function TeachersPage() {
                 </a>
                 <button onClick={() => navigate('/chat')}
                   className="flex-1 text-center py-1.5 rounded-lg text-[10px] font-medium bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 transition-all">
-                  🤖 Ask Ovik
+                  🤖 Ask AI
                 </button>
               </div>
             </div>
