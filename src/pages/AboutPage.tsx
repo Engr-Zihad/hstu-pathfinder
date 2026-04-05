@@ -1,7 +1,5 @@
-import React, { useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React from 'react';
 import { ExternalLink } from 'lucide-react';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
 import devPhoto from '@/assets/developer-photo.jpg';
 
 const socials = [
@@ -13,42 +11,19 @@ const socials = [
 ];
 
 export default function AboutPage() {
-  const navigate = useNavigate();
-  const [photo, setPhoto] = useLocalStorage<string>('hstu_dev_photo', '');
-  const photoInputRef = useRef<HTMLInputElement>(null);
-
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => { if (typeof reader.result === 'string') setPhoto(reader.result); };
-    reader.readAsDataURL(file);
-  };
-
-  const avatarSrc = photo || devPhoto;
-
   return (
     <div className="flex-1 overflow-y-auto">
-      {/* Hero gradient */}
       <div className="relative px-4 py-16 flex flex-col items-center text-center overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-600/10 via-purple-600/5 to-cyan-600/10" />
 
-        {/* Avatar with rotating ring */}
+        {/* Avatar - static gradient border, no rotation */}
         <div className="relative z-10 mb-6">
-          <div className="w-[156px] h-[156px] rounded-full p-[3px] relative"
-            style={{ background: 'conic-gradient(from 0deg, #3b82f6, #06b6d4, #8b5cf6, #ec4899, #3b82f6)', animation: 'spin 4s linear infinite' }}>
+          <div className="w-[156px] h-[156px] rounded-full p-[3px]"
+            style={{ background: 'conic-gradient(from 0deg, #3b82f6, #06b6d4, #8b5cf6, #ec4899, #3b82f6)' }}>
             <div className="w-full h-full rounded-full overflow-hidden" style={{ background: '#0f1623' }}>
-              <img src={avatarSrc} alt="Developer" className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }} />
+              <img src={devPhoto} alt="MD Mojahidul Islam Zihad" className="w-full h-full object-cover" />
             </div>
           </div>
-          <button onClick={() => photoInputRef.current?.click()}
-            className="mt-2 text-[10px] text-[--text-3] hover:text-blue-400 transition-colors">
-            📷 ছবি পরিবর্তন করুন
-          </button>
-          <input ref={photoInputRef} type="file" accept="image/*" hidden onChange={handlePhotoUpload} />
         </div>
 
         <h1 className="relative z-10 font-heading font-extrabold text-2xl bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
@@ -60,7 +35,6 @@ export default function AboutPage() {
         <p className="relative z-10 text-xs text-[--text-3] mt-1">📍 Dinajpur, Bangladesh 🇧🇩</p>
       </div>
 
-      {/* Contact buttons */}
       <div className="max-w-lg mx-auto px-4 -mt-4 relative z-10">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {socials.map(s => (
@@ -80,7 +54,6 @@ export default function AboutPage() {
         </div>
       </div>
 
-      {/* About project */}
       <div className="max-w-lg mx-auto px-4 py-8">
         <div className="glass-card rounded-2xl p-6 text-center">
           <h3 className="font-heading font-bold text-[--text-1] mb-3">HSTU CSE Guide AI সম্পর্কে</h3>
