@@ -6,6 +6,8 @@ export interface Message {
   timestamp: number;
   feedback?: 'up' | 'down' | null;
   isTyping?: boolean;
+  isError?: boolean;
+  imageUrl?: string;
 }
 
 export interface Chat {
