@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Send, Copy, ThumbsUp, ThumbsDown, ArrowDown, Plus, Trash2, MessageSquare } from 'lucide-react';
+import { Send, Copy, ThumbsUp, ThumbsDown, ArrowDown, Plus, Trash2, MessageSquare, ImageIcon, X, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { Message, Chat } from '@/types/chat';
-import { sendToClaudeAPI } from '@/utils/claudeApi';
+import { callGemini } from '@/utils/geminiApi';
 import { parseMarkdown } from '@/utils/markdownParser';
 import { typeText } from '@/utils/typeAnimation';
 import AIAvatar from '@/components/ui/AIAvatar';
@@ -15,6 +15,12 @@ const quickChips = [
   '🎓 Study Abroad', '🏆 Competitive Programming', '🎨 UI/UX Design', '👨‍🏫 Teachers Info',
 ];
 
+interface ImageAttachment {
+  base64: string;
+  mimeType: string;
+  previewUrl: string;
+}
+
 export default function ChatPage() {
   const navigate = useNavigate();
   const [chats, setChats] = useLocalStorage<Chat[]>('hstu_chats', []);
@@ -23,9 +29,11 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [showChatList, setShowChatList] = useState(false);
+  const [imageAttachment, setImageAttachment] = useState<ImageAttachment | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelTypingRef = useRef<(() => void) | null>(null);
 
   const activeChat = useMemo(() => chats.find(c => c.id === activeChatId), [chats, activeChatId]);
@@ -65,27 +73,47 @@ export default function ChatPage() {
     }
   }, [activeChatId, chats, setActiveChatId, createNewChat]);
 
+  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      toast.error('ছবি ৪MB এর বেশি হওয়া যাবে না।');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      setImageAttachment({ base64, mimeType: file.type, previewUrl: URL.createObjectURL(file) });
+    };
+    reader.readAsDataURL(file);
+    if (e.target) e.target.value = '';
+  }, []);
+
   const handleSend = useCallback(async (text?: string) => {
     const msg = (text || input).trim();
-    if (!msg || loading) return;
+    if ((!msg && !imageAttachment) || loading) return;
 
     let chatId = activeChatId;
     if (!chatId || !chats.find(c => c.id === chatId)) chatId = createNewChat();
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: msg, displayContent: msg, timestamp: Date.now() };
+    const currentImage = imageAttachment;
+    setImageAttachment(null);
+
+    const userContent = msg || (currentImage ? '📷 ছবি পাঠানো হয়েছে' : '');
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: userContent, displayContent: userContent, timestamp: Date.now(), imageUrl: currentImage?.previewUrl };
     setChats(prev => prev.map(c => c.id === chatId ? {
       ...c, messages: [...c.messages, userMsg],
-      title: c.messages.length === 0 ? msg.slice(0, 40) : c.title, updatedAt: Date.now(),
+      title: c.messages.length === 0 ? userContent.slice(0, 40) : c.title, updatedAt: Date.now(),
     } : c));
 
     setLoading(true);
     try {
       const currentMsgs = chats.find(c => c.id === chatId)?.messages || [];
-      const response = await sendToClaudeAPI(currentMsgs, msg,
-        localStorage.getItem('hstu_language') || 'auto',
-        localStorage.getItem('hstu_response_length') || 'detailed');
+      const history = currentMsgs.map(m => ({ role: m.role, content: m.content }));
+      const response = await callGemini(history, msg, currentImage?.base64, currentImage?.mimeType);
 
       const aiId = (Date.now() + 1).toString();
       const aiMsg: Message = { id: aiId, role: 'assistant', content: response, displayContent: '', timestamp: Date.now(), isTyping: true };
@@ -101,12 +129,35 @@ export default function ChatPage() {
         } : c));
       });
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Unknown error';
-      toast.error(errMsg);
-      const errorAiMsg: Message = { id: (Date.now() + 1).toString(), role: 'assistant', content: `❌ ${errMsg}`, displayContent: `❌ ${errMsg}`, timestamp: Date.now() };
+      const errCode = err instanceof Error ? err.message : 'API_ERROR';
+      const errorMessages: Record<string, string> = {
+        'RATE_LIMIT': 'একটু অপেক্ষা করুন, আবার চেষ্টা করুন।',
+        'KEY_INVALID': 'API সমস্যা হয়েছে।',
+        'BAD_REQUEST': 'ছবিটি পড়া যাচ্ছে না। অন্য ছবি দিন।',
+        'NO_RESPONSE': 'উত্তর পাওয়া যায়নি। আবার চেষ্টা করুন।',
+        'API_ERROR': 'সমস্যা হয়েছে। আবার চেষ্টা করুন।',
+      };
+      toast.error(errorMessages[errCode] || errorMessages['API_ERROR']);
+      const errorAiMsg: Message = {
+        id: (Date.now() + 1).toString(), role: 'assistant',
+        content: `❌ ${errorMessages[errCode] || errorMessages['API_ERROR']}`,
+        displayContent: `❌ ${errorMessages[errCode] || errorMessages['API_ERROR']}`,
+        timestamp: Date.now(), isError: true,
+      };
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, errorAiMsg] } : c));
     } finally { setLoading(false); }
-  }, [input, loading, activeChatId, chats, setChats, createNewChat]);
+  }, [input, loading, activeChatId, chats, setChats, createNewChat, imageAttachment]);
+
+  const handleRetry = useCallback((msgIndex: number) => {
+    if (!activeChat || loading) return;
+    const userMsgIdx = msgIndex - 1;
+    if (userMsgIdx >= 0 && activeChat.messages[userMsgIdx]?.role === 'user') {
+      setChats(prev => prev.map(c => c.id === activeChatId ? {
+        ...c, messages: c.messages.slice(0, msgIndex),
+      } : c));
+      handleSend(activeChat.messages[userMsgIdx].content);
+    }
+  }, [activeChat, activeChatId, loading, setChats, handleSend]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
@@ -143,7 +194,7 @@ export default function ChatPage() {
   }, [setChats, createNewChat]);
 
   const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  const formatRelative = (ts: number) => { const d = Date.now() - ts; if (d < 60000) return 'now'; if (d < 3600000) return `${Math.floor(d/60000)}m`; if (d < 86400000) return `${Math.floor(d/3600000)}h`; return `${Math.floor(d/86400000)}d`; };
+  const formatRelative = (ts: number) => { const d = Date.now() - ts; if (d < 60000) return 'now'; if (d < 3600000) return `${Math.floor(d / 60000)}m`; if (d < 86400000) return `${Math.floor(d / 3600000)}h`; return `${Math.floor(d / 86400000)}d`; };
 
   return (
     <div className="flex flex-1 h-[calc(100vh-3.5rem)] md:h-screen overflow-hidden">
@@ -206,7 +257,7 @@ export default function ChatPage() {
       )}
 
       <div className="flex-1 flex flex-col min-w-0 relative">
-        {/* Mobile chat header with New Chat + History */}
+        {/* Mobile chat header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-[--border] lg:hidden">
           <button onClick={() => setShowChatList(true)} className="flex items-center gap-2 text-xs text-[--text-2] hover:text-[--text-1] px-2 py-1.5 rounded-lg hover:bg-white/5">
             <MessageSquare className="w-4 h-4" /> History ({chats.length})
@@ -230,7 +281,12 @@ export default function ChatPage() {
             </div>
           ) : (
             <div className="max-w-3xl mx-auto space-y-4">
-              {visibleMessages.map(msg => (
+              {activeChat.messages.length > MAX_VISIBLE && (
+                <button className="w-full text-center text-xs text-blue-400 py-2 hover:bg-white/5 rounded-lg">
+                  ⬆ আগের {activeChat.messages.length - MAX_VISIBLE}টি বার্তা দেখুন
+                </button>
+              )}
+              {visibleMessages.map((msg, idx) => (
                 <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
                   {msg.role === 'assistant' && <AIAvatar size={36} spinning={msg.isTyping} />}
                   <div className={msg.role === 'user' ? 'max-w-[72%]' : 'max-w-[88%]'}>
@@ -242,6 +298,9 @@ export default function ChatPage() {
                     )}
                     <div className={`px-4 py-3 rounded-2xl ${msg.role === 'user' ? 'rounded-br-sm text-white' : 'glass-card rounded-bl-sm'}`}
                       style={msg.role === 'user' ? { background: 'linear-gradient(135deg, #2563eb, #1d4ed8)' } : undefined}>
+                      {msg.role === 'user' && msg.imageUrl && (
+                        <img src={msg.imageUrl} alt="Attached" className="max-w-48 max-h-48 rounded-xl mb-2 object-contain" />
+                      )}
                       {msg.role === 'assistant' ? (
                         <div className="markdown-body text-sm leading-relaxed" style={{ color: 'var(--text-1)' }}
                           dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.displayContent || msg.content) + (msg.isTyping ? '<span class="typing-cursor">▌</span>' : '') }} />
@@ -251,6 +310,9 @@ export default function ChatPage() {
                     {msg.role === 'assistant' && !msg.isTyping && (
                       <div className="flex items-center gap-1 mt-1.5">
                         <button onClick={() => copyMessage(msg.content)} className="p-1.5 rounded-lg hover:bg-white/10" style={{ color: 'var(--text-3)' }} title="Copy"><Copy className="w-3.5 h-3.5" /></button>
+                        {msg.isError && (
+                          <button onClick={() => handleRetry(visibleMessages.indexOf(msg))} className="p-1.5 rounded-lg hover:bg-white/10 text-amber-400" title="Retry"><RefreshCw className="w-3.5 h-3.5" /></button>
+                        )}
                         <button onClick={() => setFeedback(msg.id, 'up')} className={`p-1.5 rounded-lg hover:bg-white/10 ${msg.feedback === 'up' ? 'text-green-400' : ''}`} style={msg.feedback !== 'up' ? { color: 'var(--text-3)' } : undefined}><ThumbsUp className="w-3.5 h-3.5" /></button>
                         <button onClick={() => setFeedback(msg.id, 'down')} className={`p-1.5 rounded-lg hover:bg-white/10 ${msg.feedback === 'down' ? 'text-red-400' : ''}`} style={msg.feedback !== 'down' ? { color: 'var(--text-3)' } : undefined}><ThumbsDown className="w-3.5 h-3.5" /></button>
                       </div>
@@ -274,14 +336,30 @@ export default function ChatPage() {
           <button onClick={scrollToBottom} className="absolute bottom-24 right-6 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-lg z-20"><ArrowDown className="w-5 h-5" /></button>
         )}
         <div className="px-4 pb-4 pt-2">
-          <div className="max-w-3xl mx-auto glass-card rounded-2xl flex items-end gap-2 p-3">
-            <textarea ref={textareaRef} value={input} onChange={handleTextareaChange} onKeyDown={handleKeyDown}
-              placeholder="Ask me anything about HSTU CSE..." rows={1}
-              className="flex-1 bg-transparent text-sm resize-none outline-none min-h-[36px] max-h-[150px]" style={{ color: 'var(--text-1)' }} />
-            {input.length > 100 && <span className="text-[10px] shrink-0 self-end pb-1" style={{ color: 'var(--text-3)' }}>{input.length}</span>}
-            <button onClick={() => handleSend()} disabled={!input.trim() || loading}
-              className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-white disabled:opacity-40 transition-opacity"
-              style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}><Send className="w-4 h-4" /></button>
+          <div className="max-w-3xl mx-auto">
+            {imageAttachment && (
+              <div className="mb-2 flex items-start gap-2">
+                <div className="relative">
+                  <img src={imageAttachment.previewUrl} alt="Preview" className="h-16 w-16 rounded-xl object-cover border border-white/10" />
+                  <button onClick={() => setImageAttachment(null)} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center">
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="glass-card rounded-2xl flex items-end gap-2 p-3">
+              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" onChange={handleImageSelect} />
+              <button onClick={() => fileInputRef.current?.click()} className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center hover:bg-white/10 transition-colors" style={{ color: 'var(--text-3)' }} title="ছবি পাঠান">
+                <ImageIcon className="w-4 h-4" />
+              </button>
+              <textarea ref={textareaRef} value={input} onChange={handleTextareaChange} onKeyDown={handleKeyDown}
+                placeholder="Ask me anything about HSTU CSE..." rows={1}
+                className="flex-1 bg-transparent text-sm resize-none outline-none min-h-[36px] max-h-[150px]" style={{ color: 'var(--text-1)' }} />
+              {input.length > 100 && <span className="text-[10px] shrink-0 self-end pb-1" style={{ color: 'var(--text-3)' }}>{input.length}</span>}
+              <button onClick={() => handleSend()} disabled={(!input.trim() && !imageAttachment) || loading}
+                className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center text-white disabled:opacity-40 transition-opacity"
+                style={{ background: 'linear-gradient(135deg, #3b82f6, #06b6d4)' }}><Send className="w-4 h-4" /></button>
+            </div>
           </div>
         </div>
       </div>
