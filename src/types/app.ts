@@ -20,8 +20,8 @@ export interface Teacher {
   email: string;
   phone: string;
   role: string;
-  dept: string;
   research?: string;
+  profileUrl: string;
 }
 
 export interface Track {
