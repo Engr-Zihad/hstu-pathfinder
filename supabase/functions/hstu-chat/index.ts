@@ -7,21 +7,30 @@ const HSTU_CSE_SYSTEM_PROMPT = `You are "HSTU CSE Guide AI" — the most advance
 
 PERSONALITY: You are a brilliant, encouraging senior mentor. You are warm, motivating, and deeply knowledgeable. You celebrate student progress and push them to achieve more. You speak like a friendly senior vai/apu.
 
-LANGUAGE RULE: Always detect the user's language. If Bengali → reply in Bengali. If English → reply in English. If mixed → use natural Bengali-English mixed style.
+BILINGUAL RULE (CRITICAL):
+- ALWAYS reply in BOTH Bengali AND English together — every section must contain both.
+- Format: write the Bengali line first, then the English line directly below it.
+- Code blocks, formulas, course codes, links → keep as-is (no translation).
+- This bilingual rule is MANDATORY regardless of which language the user wrote in.
 
-RESPONSE FORMAT RULES — ALWAYS FOLLOW:
-1. Every response must be LONG, DETAILED, and RICHLY FORMATTED with markdown
-2. Use emojis generously (📚 💡 ✅ 🔥 🎯 💻 🚀 ⚡ 🏆 🌟 ✨ 📌 🎓)
-3. Structure with ## Headers and ### Sub-headers
-4. Use numbered steps for processes, bullet points for lists
-5. Include **🎥 YouTube Resources** section with real search links when relevant
-6. Include **🔗 Learn More** section with real website links when relevant
-7. Include code examples with syntax highlighting for any programming topic
-8. End every response with a **💪 Motivation** section
-9. Never give short answers — always expand with examples, tips, and real-world context
-10. Use markdown tables for comparisons and structured data
-11. Use > blockquotes for important tips
-12. Use \`inline code\` for technical terms
+SEQUENCED PART-BY-PART STRUCTURE (ALWAYS FOLLOW):
+Every answer MUST be broken into clearly numbered parts:
+  ## Part 1 — Quick Answer / সংক্ষিপ্ত উত্তর
+  ## Part 2 — Detailed Explanation / বিস্তারিত ব্যাখ্যা
+  ## Part 3 — Step-by-Step Solution / ধাপে ধাপে সমাধান (numbered 1,2,3...)
+  ## Part 4 — Example / উদাহরণ (with code or worked math)
+  ## Part 5 — Common Mistakes / সাধারণ ভুল
+  ## Part 6 — 🎥 Resources & Links
+  ## Part 7 — 💪 Motivation / অনুপ্রেরণা
+Skip a part ONLY if truly irrelevant. Each part must be substantial.
+
+FORMATTING:
+1. Long, detailed, richly formatted markdown
+2. Use emojis: 📚 💡 ✅ 🔥 🎯 💻 🚀 ⚡ 🏆 🌟 ✨ 📌 🎓
+3. ## Headers, ### Sub-headers, numbered steps, bullets
+4. Code blocks with language tag for any programming topic
+5. Markdown tables for comparisons; > blockquotes for tips; `inline code` for technical terms
+6. Never give short answers — always expand with examples, tips, and real-world context
 
 HSTU ACADEMIC KNOWLEDGE:
 
@@ -184,48 +193,63 @@ Deno.serve(async (req) => {
       });
     }
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'system', content: HSTU_CSE_SYSTEM_PROMPT },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
+    // Multi-model fallback chain — best quality first, then resilient fallbacks.
+    const MODEL_CHAIN = [
+      'google/gemini-2.5-pro',
+      'openai/gpt-5-mini',
+      'google/gemini-2.5-flash',
+      'google/gemini-2.5-flash-lite',
+    ];
 
-    if (!response.ok) {
-      const raw = await response.text();
-      let detail = raw;
-      try { detail = JSON.parse(raw)?.error?.message || JSON.parse(raw)?.error || raw; } catch {}
-      console.error('AI error:', response.status, raw);
+    let response: Response | null = null;
+    let lastErrStatus = 0;
+    let lastErrDetail = '';
 
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: 'Rate limited — please try again shortly.', detail }), {
+    for (const model of MODEL_CHAIN) {
+      const r = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: HSTU_CSE_SYSTEM_PROMPT }, ...messages],
+          stream: true,
+        }),
+      });
+
+      if (r.ok) { response = r; break; }
+
+      // Only fall back on transient/quota issues; surface 400 (bad input) immediately.
+      const raw = await r.text();
+      lastErrStatus = r.status;
+      lastErrDetail = raw;
+      console.error(`Model ${model} failed: ${r.status}`, raw);
+      if (r.status === 400) break;
+      if (![429, 402, 500, 502, 503, 504].includes(r.status)) break;
+    }
+
+    if (!response) {
+      let detail = lastErrDetail;
+      try { detail = JSON.parse(lastErrDetail)?.error?.message || JSON.parse(lastErrDetail)?.error || lastErrDetail; } catch {}
+      if (lastErrStatus === 429) {
+        return new Response(JSON.stringify({ error: 'সব মডেল rate-limited। একটু পরে আবার চেষ্টা করুন। / All models rate-limited, try again shortly.', detail }), {
           status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: 'AI credits exhausted. Please add credits in Workspace → Usage.', detail }), {
+      if (lastErrStatus === 402) {
+        return new Response(JSON.stringify({ error: 'AI credits শেষ। Workspace → Usage থেকে credit যোগ করুন। / AI credits exhausted.', detail }), {
           status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      if (response.status === 400) {
+      if (lastErrStatus === 400) {
         const isVision = /image|vision|multimodal|content type|unsupported/i.test(String(detail));
         return new Response(JSON.stringify({
           error: isVision
-            ? 'This model could not process the image. Try a smaller/clearer image or send text only.'
+            ? 'এই মডেল ছবি প্রসেস করতে পারেনি। ছোট/পরিষ্কার ছবি দিন বা শুধু text পাঠান। / Model could not process the image.'
             : `Bad request: ${detail}`,
           detail,
         }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
-      return new Response(JSON.stringify({ error: `AI service error (${response.status})`, detail }), {
+      return new Response(JSON.stringify({ error: `AI service error (${lastErrStatus})`, detail }), {
         status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -233,6 +257,13 @@ Deno.serve(async (req) => {
     return new Response(response.body, {
       headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
     });
+  } catch (e) {
+    console.error('Error:', e);
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Unknown error' }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
   } catch (e) {
     console.error('Error:', e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Unknown error' }), {
