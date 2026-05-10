@@ -193,48 +193,63 @@ Deno.serve(async (req) => {
       });
     }
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'system', content: HSTU_CSE_SYSTEM_PROMPT },
-          ...messages,
-        ],
-        stream: true,
-      }),
-    });
+    // Multi-model fallback chain — best quality first, then resilient fallbacks.
+    const MODEL_CHAIN = [
+      'google/gemini-2.5-pro',
+      'openai/gpt-5-mini',
+      'google/gemini-2.5-flash',
+      'google/gemini-2.5-flash-lite',
+    ];
 
-    if (!response.ok) {
-      const raw = await response.text();
-      let detail = raw;
-      try { detail = JSON.parse(raw)?.error?.message || JSON.parse(raw)?.error || raw; } catch {}
-      console.error('AI error:', response.status, raw);
+    let response: Response | null = null;
+    let lastErrStatus = 0;
+    let lastErrDetail = '';
 
-      if (response.status === 429) {
-        return new Response(JSON.stringify({ error: 'Rate limited — please try again shortly.', detail }), {
+    for (const model of MODEL_CHAIN) {
+      const r = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'system', content: HSTU_CSE_SYSTEM_PROMPT }, ...messages],
+          stream: true,
+        }),
+      });
+
+      if (r.ok) { response = r; break; }
+
+      // Only fall back on transient/quota issues; surface 400 (bad input) immediately.
+      const raw = await r.text();
+      lastErrStatus = r.status;
+      lastErrDetail = raw;
+      console.error(`Model ${model} failed: ${r.status}`, raw);
+      if (r.status === 400) break;
+      if (![429, 402, 500, 502, 503, 504].includes(r.status)) break;
+    }
+
+    if (!response) {
+      let detail = lastErrDetail;
+      try { detail = JSON.parse(lastErrDetail)?.error?.message || JSON.parse(lastErrDetail)?.error || lastErrDetail; } catch {}
+      if (lastErrStatus === 429) {
+        return new Response(JSON.stringify({ error: 'সব মডেল rate-limited। একটু পরে আবার চেষ্টা করুন। / All models rate-limited, try again shortly.', detail }), {
           status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      if (response.status === 402) {
-        return new Response(JSON.stringify({ error: 'AI credits exhausted. Please add credits in Workspace → Usage.', detail }), {
+      if (lastErrStatus === 402) {
+        return new Response(JSON.stringify({ error: 'AI credits শেষ। Workspace → Usage থেকে credit যোগ করুন। / AI credits exhausted.', detail }), {
           status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      if (response.status === 400) {
+      if (lastErrStatus === 400) {
         const isVision = /image|vision|multimodal|content type|unsupported/i.test(String(detail));
         return new Response(JSON.stringify({
           error: isVision
-            ? 'This model could not process the image. Try a smaller/clearer image or send text only.'
+            ? 'এই মডেল ছবি প্রসেস করতে পারেনি। ছোট/পরিষ্কার ছবি দিন বা শুধু text পাঠান। / Model could not process the image.'
             : `Bad request: ${detail}`,
           detail,
         }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
-      return new Response(JSON.stringify({ error: `AI service error (${response.status})`, detail }), {
+      return new Response(JSON.stringify({ error: `AI service error (${lastErrStatus})`, detail }), {
         status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -242,6 +257,13 @@ Deno.serve(async (req) => {
     return new Response(response.body, {
       headers: { ...corsHeaders, 'Content-Type': 'text/event-stream' },
     });
+  } catch (e) {
+    console.error('Error:', e);
+    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Unknown error' }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
   } catch (e) {
     console.error('Error:', e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Unknown error' }), {
