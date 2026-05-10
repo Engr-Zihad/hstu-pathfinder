@@ -1,50 +1,94 @@
-import { SYSTEM_PROMPT } from '../constants/systemPrompt';
+// Calls the Lovable AI edge function (server-side key, no browser secrets).
+// Streams tokens, accumulates them, returns the full text — keeps the existing
+// typing animation in ChatPage working without changes.
 
-const GEMINI_KEY = import.meta.env.VITE_GEMINI_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`;
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/hstu-chat`;
+const AUTH = `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`;
+
+type HistoryMsg = { role: string; content: string };
 
 export async function callGemini(
-  history: { role: string; content: string }[],
+  history: HistoryMsg[],
   userMessage: string,
   imageBase64?: string,
   imageMimeType?: string
 ): Promise<string> {
-  const userParts: any[] = [{ text: userMessage || 'এই ছবিটি দেখো এবং বিস্তারিত বলো।' }];
+  // Build OpenAI-compatible messages. Drop the latest user message from history
+  // (ChatPage already appended it before calling), then add the new turn —
+  // multimodal if an image is attached.
+  const trimmed = history.slice(-12);
+  while (trimmed.length && trimmed[trimmed.length - 1].role === 'user') trimmed.pop();
 
-  if (imageBase64 && imageMimeType) {
-    userParts.push({
-      inline_data: { mime_type: imageMimeType, data: imageBase64 },
-    });
-  }
+  const userText = userMessage || (imageBase64 ? 'এই ছবিটি দেখে বিস্তারিত বুঝিয়ে বলো।' : '');
 
-  const contents = [
-    ...history.slice(-12).map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
+  const userMsg: any = imageBase64 && imageMimeType
+    ? {
+        role: 'user',
+        content: [
+          { type: 'text', text: userText },
+          { type: 'image_url', image_url: { url: `data:${imageMimeType};base64,${imageBase64}` } },
+        ],
+      }
+    : { role: 'user', content: userText };
+
+  const messages = [
+    ...trimmed.map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: m.content,
     })),
-    { role: 'user', parts: userParts },
+    userMsg,
   ];
 
-  const response = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents,
-      generationConfig: { maxOutputTokens: 4096, temperature: 0.7 },
-    }),
-  });
-
-  if (!response.ok) {
-    if (response.status === 429) throw new Error('RATE_LIMIT');
-    if (response.status === 403) throw new Error('KEY_INVALID');
-    if (response.status === 400) throw new Error('BAD_REQUEST');
+  let resp: Response;
+  try {
+    resp = await fetch(CHAT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: AUTH },
+      body: JSON.stringify({ messages }),
+    });
+  } catch {
     throw new Error('API_ERROR');
   }
 
-  const data = await response.json();
-  if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
-    throw new Error('NO_RESPONSE');
+  if (!resp.ok) {
+    if (resp.status === 429) throw new Error('RATE_LIMIT');
+    if (resp.status === 402) throw new Error('KEY_INVALID');
+    if (resp.status === 400) throw new Error('BAD_REQUEST');
+    throw new Error('API_ERROR');
   }
-  return data.candidates[0].content.parts[0].text;
+  if (!resp.body) throw new Error('NO_RESPONSE');
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+  let done = false;
+
+  while (!done) {
+    const { done: rDone, value } = await reader.read();
+    if (rDone) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let idx: number;
+    while ((idx = buffer.indexOf('\n')) !== -1) {
+      let line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      if (!line || line.startsWith(':')) continue;
+      if (!line.startsWith('data: ')) continue;
+      const json = line.slice(6).trim();
+      if (json === '[DONE]') { done = true; break; }
+      try {
+        const parsed = JSON.parse(json);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) full += delta;
+      } catch {
+        buffer = line + '\n' + buffer;
+        break;
+      }
+    }
+  }
+
+  if (!full.trim()) throw new Error('NO_RESPONSE');
+  return full;
 }
