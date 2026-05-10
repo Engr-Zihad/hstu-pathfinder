@@ -129,19 +129,12 @@ export default function ChatPage() {
         } : c));
       });
     } catch (err) {
-      const errCode = err instanceof Error ? err.message : 'API_ERROR';
-      const errorMessages: Record<string, string> = {
-        'RATE_LIMIT': 'একটু অপেক্ষা করুন, আবার চেষ্টা করুন।',
-        'KEY_INVALID': 'API সমস্যা হয়েছে।',
-        'BAD_REQUEST': 'ছবিটি পড়া যাচ্ছে না। অন্য ছবি দিন।',
-        'NO_RESPONSE': 'উত্তর পাওয়া যায়নি। আবার চেষ্টা করুন।',
-        'API_ERROR': 'সমস্যা হয়েছে। আবার চেষ্টা করুন।',
-      };
-      toast.error(errorMessages[errCode] || errorMessages['API_ERROR']);
+      const reason = err instanceof Error && err.message ? err.message : 'অজানা সমস্যা হয়েছে।';
+      toast.error(reason.length > 120 ? reason.slice(0, 117) + '…' : reason);
       const errorAiMsg: Message = {
         id: (Date.now() + 1).toString(), role: 'assistant',
-        content: `❌ ${errorMessages[errCode] || errorMessages['API_ERROR']}`,
-        displayContent: `❌ ${errorMessages[errCode] || errorMessages['API_ERROR']}`,
+        content: `❌ ${reason}`,
+        displayContent: `❌ ${reason}`,
         timestamp: Date.now(), isError: true,
       };
       setChats(prev => prev.map(c => c.id === chatId ? { ...c, messages: [...c.messages, errorAiMsg] } : c));

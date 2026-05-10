@@ -201,20 +201,32 @@ Deno.serve(async (req) => {
     });
 
     if (!response.ok) {
+      const raw = await response.text();
+      let detail = raw;
+      try { detail = JSON.parse(raw)?.error?.message || JSON.parse(raw)?.error || raw; } catch {}
+      console.error('AI error:', response.status, raw);
+
       if (response.status === 429) {
-        return new Response(JSON.stringify({ error: 'Rate limited — please try again shortly.' }), {
+        return new Response(JSON.stringify({ error: 'Rate limited — please try again shortly.', detail }), {
           status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       if (response.status === 402) {
-        return new Response(JSON.stringify({ error: 'AI credits exhausted.' }), {
+        return new Response(JSON.stringify({ error: 'AI credits exhausted. Please add credits in Workspace → Usage.', detail }), {
           status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      const t = await response.text();
-      console.error('AI error:', response.status, t);
-      return new Response(JSON.stringify({ error: 'AI service error' }), {
-        status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      if (response.status === 400) {
+        const isVision = /image|vision|multimodal|content type|unsupported/i.test(String(detail));
+        return new Response(JSON.stringify({
+          error: isVision
+            ? 'This model could not process the image. Try a smaller/clearer image or send text only.'
+            : `Bad request: ${detail}`,
+          detail,
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ error: `AI service error (${response.status})`, detail }), {
+        status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
