@@ -51,12 +51,17 @@ export async function callGemini(
   }
 
   if (!resp.ok) {
-    if (resp.status === 429) throw new Error('RATE_LIMIT');
-    if (resp.status === 402) throw new Error('KEY_INVALID');
-    if (resp.status === 400) throw new Error('BAD_REQUEST');
-    throw new Error('API_ERROR');
+    let serverMsg = '';
+    try {
+      const data = await resp.json();
+      serverMsg = data?.error || data?.detail || '';
+    } catch {}
+    if (resp.status === 429) throw new Error(serverMsg || 'একটু পরে আবার চেষ্টা করুন (rate limit)।');
+    if (resp.status === 402) throw new Error(serverMsg || 'AI credits শেষ। Workspace → Usage থেকে credit যোগ করুন।');
+    if (resp.status === 400) throw new Error(serverMsg || 'Bad request — input ঠিক নয়।');
+    throw new Error(serverMsg || `AI service error (${resp.status})`);
   }
-  if (!resp.body) throw new Error('NO_RESPONSE');
+  if (!resp.body) throw new Error('সার্ভার থেকে কোনো response পাওয়া যায়নি।');
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
