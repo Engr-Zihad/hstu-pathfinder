@@ -5,7 +5,8 @@ export function typeText(
 ): () => void {
   let i = 0;
   let cancelled = false;
-  const charsPerFrame = Math.max(2, Math.floor(fullText.length / 150));
+  // Smoother, more "AI typing" feel — small chunks per frame, capped for long replies.
+  const charsPerFrame = Math.min(6, Math.max(1, Math.floor(fullText.length / 400)));
 
   function frame() {
     if (cancelled) return;
